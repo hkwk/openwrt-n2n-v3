@@ -1,0 +1,20 @@
+#!/bin/sh /etc/rc.common
+
+START=99
+STOP=10
+USE_PROCD=1
+
+PROG=/usr/sbin/edge
+CONF=/etc/n2n/edge.conf
+
+start_service() {
+	[ -f "$CONF" ] || return 1
+
+	procd_open_instance
+	procd_set_param command "$PROG" "$CONF" -f
+	procd_set_param file "$CONF"
+	procd_set_param respawn 3600 5 0
+	procd_set_param stdout 1
+	procd_set_param stderr 1
+	procd_close_instance
+}

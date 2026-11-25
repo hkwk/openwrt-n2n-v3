@@ -1,0 +1,279 @@
+name: Build OpenWrt n2n v3 Packages
+
+on:
+  schedule:
+    # 每周一 UTC 02:00 自动检查上游更新
+    - cron: '0 2 * * 1'
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - 'README.md'
+  workflow_dispatch:
+    inputs:
+      n2n_branch:
+        description: 'ntop/n2n 分支或标签 (如 dev, 3.1-stable, 3.1.1)'
+        required: false
+        default: 'dev'
+      force_release:
+        description: '即使 Release 已存在也强制重新编译发布'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+env:
+  OPENWRT_25_VER: '25.12.6'
+  OPENWRT_19_VER: '19.07.10'
+
+jobs:
+  check-upstream:
+    runs-on: ubuntu-24.04
+    outputs:
+      n2n_commit: ${{ steps.meta.outputs.n2n_commit }}
+      n2n_short_sha: ${{ steps.meta.outputs.n2n_short_sha }}
+      pkg_version: ${{ steps.meta.outputs.pkg_version }}
+      release_tag: ${{ steps.meta.outputs.release_tag }}
+      should_build: ${{ steps.meta.outputs.should_build }}
+    steps:
+      - name: Fetch ntop/n2n upstream metadata
+        id: meta
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          N2N_REF: ${{ github.event.inputs.n2n_branch || 'dev' }}
+          FORCE_RELEASE: ${{ github.event.inputs.force_release || 'false' }}
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch "${N2N_REF}" https://github.com/ntop/n2n.git /tmp/n2n
+          cd /tmp/n2n
+
+          FULL_SHA=$(git rev-parse HEAD)
+          SHORT_SHA=$(git rev-parse --short=7 HEAD)
+
+          # 从 configure.ac 提取主版本号 (例如 3.1.1)，保证符合 apk 与 ipk 命名规范
+          BASE_VER=$(grep -oP 'N2N_VERSION_MAJOR=\K[0-9]+' configure.ac || echo "3")
+          MINOR_VER=$(grep -oP 'N2N_VERSION_MINOR=\K[0-9]+' configure.ac || echo "1")
+          PATCH_VER=$(grep -oP 'N2N_VERSION_PATCH=\K[0-9]+' configure.ac || echo "1")
+          COMMIT_DATE=$(git show -s --format=%cd --date=format:%Y%m%d HEAD)
+
+          if [[ "${N2N_REF}" =~ ^[0-9]+\.[0-9]+ ]]; then
+            PKG_VER="${BASE_VER}.${MINOR_VER}.${PATCH_VER}"
+            RELEASE_TAG="v${PKG_VER}"
+          else
+            # 使用 _pYYYYMMDD 格式，OpenWrt 25.12 的 apk 与 19.07 的 opkg 均可正常解析
+            PKG_VER="${BASE_VER}.${MINOR_VER}.${PATCH_VER}_p${COMMIT_DATE}"
+            RELEASE_TAG="v${BASE_VER}.${MINOR_VER}.${PATCH_VER}-${COMMIT_DATE}-${SHORT_SHA}"
+          fi
+
+          SHOULD_BUILD="true"
+          if [ "${GITHUB_EVENT_NAME}" = "schedule" ] && [ "${FORCE_RELEASE}" != "true" ]; then
+            if gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+              echo "Release ${RELEASE_TAG} already exists, skipping scheduled build."
+              SHOULD_BUILD="false"
+            fi
+          fi
+
+          echo "n2n_commit=${FULL_SHA}" >> "$GITHUB_OUTPUT"
+          echo "n2n_short_sha=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+          echo "pkg_version=${PKG_VER}" >> "$GITHUB_OUTPUT"
+          echo "release_tag=${RELEASE_TAG}" >> "$GITHUB_OUTPUT"
+          echo "should_build=${SHOULD_BUILD}" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: check-upstream
+    if: needs.check-upstream.outputs.should_build == 'true'
+    runs-on: ubuntu-24.04
+    container:
+      image: ${{ matrix.container_image }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ================= OpenWrt 25.12 (apk) =================
+          - openwrt_ver: '25.12.6'
+            target: 'x86'
+            subtarget: '64'
+            pkg_ext: 'apk'
+            container_image: 'ubuntu:24.04'
+          - openwrt_ver: '25.12.6'
+            target: 'ipq40xx'
+            subtarget: 'generic'
+            pkg_ext: 'apk'
+            container_image: 'ubuntu:24.04'
+          - openwrt_ver: '25.12.6'
+            target: 'ramips'
+            subtarget: 'mt7621'
+            pkg_ext: 'apk'
+            container_image: 'ubuntu:24.04'
+          - openwrt_ver: '25.12.6'
+            target: 'ath79'
+            subtarget: 'generic'
+            pkg_ext: 'apk'
+            container_image: 'ubuntu:24.04'
+          - openwrt_ver: '25.12.6'
+            target: 'mediatek'
+            subtarget: 'filogic'
+            pkg_ext: 'apk'
+            container_image: 'ubuntu:24.04'
+          - openwrt_ver: '25.12.6'
+            target: 'armsr'
+            subtarget: 'armv8'
+            pkg_ext: 'apk'
+            container_image: 'ubuntu:24.04'
+
+          # ================= OpenWrt 19.07 (ipk) =================
+          - openwrt_ver: '19.07.10'
+            target: 'x86'
+            subtarget: '64'
+            pkg_ext: 'ipk'
+            container_image: 'ubuntu:20.04'
+          - openwrt_ver: '19.07.10'
+            target: 'ipq40xx'
+            subtarget: 'generic'
+            pkg_ext: 'ipk'
+            container_image: 'ubuntu:20.04'
+          - openwrt_ver: '19.07.10'
+            target: 'ramips'
+            subtarget: 'mt7621'
+            pkg_ext: 'ipk'
+            container_image: 'ubuntu:20.04'
+          - openwrt_ver: '19.07.10'
+            target: 'ath79'
+            subtarget: 'generic'
+            pkg_ext: 'ipk'
+            container_image: 'ubuntu:20.04'
+          - openwrt_ver: '19.07.10'
+            target: 'armvirt'
+            subtarget: '64'
+            pkg_ext: 'ipk'
+            container_image: 'ubuntu:20.04'
+
+    steps:
+      - name: Install build dependencies
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            autoconf automake build-essential ca-certificates curl file gawk \
+            git libncurses5-dev libssl-dev libtool patch pkg-config python3 \
+            rsync subversion time unzip wget xz-utils zlib1g-dev zstd
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download and extract OpenWrt SDK
+        run: |
+          set -euo pipefail
+          BASE_URL="https://downloads.openwrt.org/releases/${{ matrix.openwrt_ver }}/targets/${{ matrix.target }}/${{ matrix.subtarget }}"
+          SDK_FILE=$(curl -fsSL "${BASE_URL}/sha256sums" | grep -oE 'openwrt-sdk-[^ ]+\.tar\.(zst|xz)' | head -n 1)
+
+          if [ -z "${SDK_FILE}" ]; then
+            echo "Error: Could not find SDK archive at ${BASE_URL}"
+            exit 1
+          fi
+
+          echo "Downloading ${BASE_URL}/${SDK_FILE} ..."
+          curl -fSL -o "${SDK_FILE}" "${BASE_URL}/${SDK_FILE}"
+
+          mkdir -p sdk
+          if [[ "${SDK_FILE}" == *.tar.zst ]]; then
+            tar --zstd -xf "${SDK_FILE}" -C sdk --strip-components=1
+          else
+            tar -Jxf "${SDK_FILE}" -C sdk --strip-components=1
+          fi
+          rm -f "${SDK_FILE}"
+
+      - name: Prepare n2n-v3 package & compile
+        env:
+          # 容器内以 root 运行时必须开启，否则 autoconf/configure 会拒绝执行
+          FORCE_UNSAFE_CONFIGURE: '1'
+          PKG_VER: ${{ needs.check-upstream.outputs.pkg_version }}
+          N2N_COMMIT: ${{ needs.check-upstream.outputs.n2n_commit }}
+        run: |
+          set -euo pipefail
+          cp -r package/n2n-v3 sdk/package/n2n-v3
+
+          # 将 Makefile 中的版本和 commit 锁定为本次上游检出的精确版本
+          sed -i "s/^PKG_VERSION:=.*/PKG_VERSION:=${PKG_VER}/" sdk/package/n2n-v3/Makefile
+          sed -i "s/^PKG_SOURCE_VERSION:=.*/PKG_SOURCE_VERSION:=${N2N_COMMIT}/" sdk/package/n2n-v3/Makefile
+
+          cd sdk
+          ./scripts/feeds update base
+          ./scripts/feeds install libopenssl
+          make defconfig
+
+          # 并行编译，若出错自动回退单线程输出完整日志
+          make package/n2n-v3/compile -j"$(nproc)" V=s || make package/n2n-v3/compile -j1 V=s
+
+      - name: Collect and rename packages
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          EXT="${{ matrix.pkg_ext }}"
+          OWRT_VER="${{ matrix.openwrt_ver }}"
+          TGT="${{ matrix.target }}-${{ matrix.subtarget }}"
+
+          find sdk/bin/packages -type f \( -name "n2n-edge*.${EXT}" -o -name "n2n-supernode*.${EXT}" \) | while read -r pkg; do
+            BASE=$(basename "$pkg")
+            # 保留原始包名信息，同时前置 OpenWrt 版本与目标平台，便于在 Release 页面快速区分
+            cp "$pkg" "dist/openwrt-${OWRT_VER}_${TGT}_${BASE}"
+          done
+
+          ls -lh dist/
+          if [ -z "$(ls -A dist/)" ]; then
+            echo "Error: No compiled packages found!"
+            exit 1
+          fi
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: pkgs-${{ matrix.openwrt_ver }}-${{ matrix.target }}-${{ matrix.subtarget }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    needs: [check-upstream, build]
+    if: needs.check-upstream.outputs.should_build == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Generate SHA256SUMS
+        run: |
+          cd release-assets
+          sha256sum *.apk *.ipk > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.check-upstream.outputs.release_tag }}
+          name: "n2n v3 (${{ needs.check-upstream.outputs.release_tag }})"
+          draft: false
+          prerelease: false
+          body: |
+            Automated OpenWrt build for [ntop/n2n](https://github.com/ntop/n2n) v3.
+
+            - **Upstream Commit**: `${{ needs.check-upstream.outputs.n2n_commit }}`
+            - **Package Version**: `${{ needs.check-upstream.outputs.pkg_version }}`
+            - **Supported OpenWrt Series**: `25.12.6` (`.apk`) & `19.07.10` (`.ipk`)
+
+            ### Installation
+
+            **OpenWrt 25.12 (`.apk`)**:
+            ```sh
+            apk add --allow-untrusted ./openwrt-25.12.6_<target>_n2n-edge*.apk
+            ```
+
+            **OpenWrt 19.07 (`.ipk`)**:
+            ```sh
+            opkg update
+            opkg install ./openwrt-19.07.10_<target>_n2n-edge*.ipk
+            ```
+          files: release-assets/*
