@@ -23,6 +23,10 @@ on:
 permissions:
   contents: write
 
+defaults:
+  run:
+    shell: bash
+
 env:
   OPENWRT_25_VER: '25.12.6'
   OPENWRT_19_VER: '19.07.10'
