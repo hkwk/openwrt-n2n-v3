@@ -162,6 +162,10 @@ jobs:
             autoconf automake build-essential ca-certificates curl file gawk \
             git libncurses5-dev libssl-dev libtool patch pkg-config python3 \
             rsync subversion time unzip wget xz-utils zlib1g-dev zstd
+          if [ "${{ matrix.openwrt_ver }}" = "19.07.10" ]; then
+            apt-get install -y --no-install-recommends python2
+            ln -sf /usr/bin/python2 /usr/bin/python
+          fi
 
       - name: Checkout repository
         uses: actions/checkout@v4

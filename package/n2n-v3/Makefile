@@ -63,7 +63,7 @@ CONFIGURE_VARS += \
 	ac_cv_lib_cap_cap_get_proc=no
 
 define Build/Configure
-	(cd $(PKG_BUILD_DIR) && autoconf)
+	(cd $(PKG_BUILD_DIR) && autoheader && autoconf)
 	$(call Build/Configure/Default)
 endef
 
