@@ -56,8 +56,9 @@ endef
 CONFIGURE_ARGS += \
 	--with-openssl
 
-# 禁用非核心可选依赖，避免 19.07 与 25.12 宿主机/feed 环境差异导致编译失败
-# n2n v3 已内置 LZO 压缩与全套加密算法，若需 zstd 可改为 DEPENDS 增加 +libzstd 并移除下面对应项
+# Disable non-core optional dependencies to avoid build failures due to differences between 19.07 and 25.12 host/feed environments
+
+# n2n v3 has lzo compression and full set of encryption algorithms built-in, if zstd is needed, you can add +libzstd to DEPENDS and remove the corresponding item below
 CONFIGURE_VARS += \
 	ac_cv_lib_zstd_ZSTD_compress=no \
 	ac_cv_lib_cap_cap_get_proc=no

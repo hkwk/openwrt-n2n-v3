@@ -2,7 +2,7 @@ name: Build OpenWrt n2n v3 Packages
 
 on:
   schedule:
-    # 每周一 UTC 02:00 自动检查上游更新
+    # Check for upstream updates every Monday at 02:00 UTC
     - cron: '0 2 * * 1'
   push:
     branches:
@@ -12,11 +12,11 @@ on:
   workflow_dispatch:
     inputs:
       n2n_branch:
-        description: 'ntop/n2n 分支或标签 (如 dev, 3.1-stable, 3.1.1)'
+        description: 'ntop/n2n branch (such asdev, 3.1-stable, 3.1.1)'
         required: false
         default: 'dev'
       force_release:
-        description: '即使 Release 已存在也强制重新编译发布'
+        description: 'Even if the Release already exists, force a recompilation and release'
         type: boolean
         default: false
 
@@ -54,8 +54,7 @@ jobs:
 
           FULL_SHA=$(git rev-parse HEAD)
           SHORT_SHA=$(git rev-parse --short=7 HEAD)
-
-          # 从 configure.ac 提取主版本号 (例如 3.1.1)，保证符合 apk 与 ipk 命名规范
+          # Find the latest tag that matches the branch pattern (e.g., 3.1.1 for dev or 3.1-stable)
           BASE_VER=$(grep -oP 'N2N_VERSION_MAJOR=\K[0-9]+' configure.ac || echo "3")
           MINOR_VER=$(grep -oP 'N2N_VERSION_MINOR=\K[0-9]+' configure.ac || echo "1")
           PATCH_VER=$(grep -oP 'N2N_VERSION_PATCH=\K[0-9]+' configure.ac || echo "1")
@@ -65,7 +64,7 @@ jobs:
             PKG_VER="${BASE_VER}.${MINOR_VER}.${PATCH_VER}"
             RELEASE_TAG="v${PKG_VER}"
           else
-            # 使用 _pYYYYMMDD 格式，OpenWrt 25.12 的 apk 与 19.07 的 opkg 均可正常解析
+            # Use the format _pYYYYMMDD for the package version to ensure compatibility with both OpenWrt 25.12's apk and 19.07's opkg
             PKG_VER="${BASE_VER}.${MINOR_VER}.${PATCH_VER}_p${COMMIT_DATE}"
             RELEASE_TAG="v${BASE_VER}.${MINOR_VER}.${PATCH_VER}-${COMMIT_DATE}-${SHORT_SHA}"
           fi
@@ -194,15 +193,14 @@ jobs:
 
       - name: Prepare n2n-v3 package & compile
         env:
-          # 容器内以 root 运行时必须开启，否则 autoconf/configure 会拒绝执行
+          # The OpenWrt SDK runs as a non-root user by default, but we are running the container as root. Some build scripts check for root and refuse to run, so we set this variable to bypass that check.
           FORCE_UNSAFE_CONFIGURE: '1'
           PKG_VER: ${{ needs.check-upstream.outputs.pkg_version }}
           N2N_COMMIT: ${{ needs.check-upstream.outputs.n2n_commit }}
         run: |
           set -euo pipefail
           cp -r package/n2n-v3 sdk/package/n2n-v3
-
-          # 将 Makefile 中的版本和 commit 锁定为本次上游检出的精确版本
+          # Use the upstream commit hash to ensure reproducible builds
           sed -i "s/^PKG_VERSION:=.*/PKG_VERSION:=${PKG_VER}/" sdk/package/n2n-v3/Makefile
           sed -i "s/^PKG_SOURCE_VERSION:=.*/PKG_SOURCE_VERSION:=${N2N_COMMIT}/" sdk/package/n2n-v3/Makefile
 
@@ -210,8 +208,7 @@ jobs:
           ./scripts/feeds update base
           ./scripts/feeds install libopenssl
           make defconfig
-
-          # 并行编译，若出错自动回退单线程输出完整日志
+          # Parallel build, if it fails, fallback to single-threaded build to get full logs
           make package/n2n-v3/compile -j"$(nproc)" V=s || make package/n2n-v3/compile -j1 V=s
 
       - name: Collect and rename packages
@@ -224,7 +221,7 @@ jobs:
 
           find sdk/bin/packages -type f \( -name "n2n-edge*.${EXT}" -o -name "n2n-supernode*.${EXT}" \) | while read -r pkg; do
             BASE=$(basename "$pkg")
-            # 保留原始包名信息，同时前置 OpenWrt 版本与目标平台，便于在 Release 页面快速区分
+            # Strip the original version and commit from the filename, keeping only the package name and extension
             cp "$pkg" "dist/openwrt-${OWRT_VER}_${TGT}_${BASE}"
           done
 
